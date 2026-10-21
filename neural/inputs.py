@@ -25,10 +25,19 @@ class InputState:
 class InputProvider:
     name = "base"
     has_camera = False
+    players = 1
 
     def start(self): ...
     def stop(self): ...
     def poll(self, dt: float) -> InputState: raise NotImplementedError
+
+    def set_players(self, n: int):
+        self.players = 2 if n >= 2 else 1
+
+    def poll_players(self, dt: float):
+        """[player 1 state, player 2 state]. Providers that only have one player report
+        player 2 as absent; the app calls this once per frame instead of poll()."""
+        return [self.poll(dt), InputState(present=False)]
     def preview(self):
         """Small RGB numpy frame for the picture-in-picture view, or None."""
         return None
@@ -43,6 +52,27 @@ class MouseInput(InputProvider):
 
     def __init__(self):
         self._prev_down = False
+        self._p2 = [C.W * 0.75, C.H * 0.5]
+        self._p2_prev = False
+
+    def poll_players(self, dt: float):
+        """Player 2 on the keyboard (development / no second hand): arrow keys aim,
+        Right-Shift or Enter fire."""
+        p1 = self.poll(dt)
+        if self.players < 2:
+            return [p1, InputState(present=False)]
+        keys = pygame.key.get_pressed()
+        v = 760.0 * dt
+        self._p2[0] += (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]) * v
+        self._p2[1] += (keys[pygame.K_DOWN] - keys[pygame.K_UP]) * v
+        self._p2[0] = min(max(self._p2[0], 0), C.W)
+        self._p2[1] = min(max(self._p2[1], 0), C.H)
+        down = keys[pygame.K_RSHIFT] or keys[pygame.K_RETURN]
+        fire = down and not self._p2_prev
+        self._p2_prev = down
+        x, y = self._p2
+        return [p1, InputState(x=x, y=y, present=True, fist=bool(down), fire=bool(fire),
+                               fire_x=x, fire_y=y, ratio=0.9 if down else 1.8)]
 
     def poll(self, dt: float) -> InputState:
         mx, my = pygame.mouse.get_pos()

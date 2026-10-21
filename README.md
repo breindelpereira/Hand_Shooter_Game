@@ -112,6 +112,29 @@ Targets no longer all emerge from one point: many **swoop** in from the sides an
 lane, and Score Attack / Survival spawn **formations** - V-waves, arcs and rings that spin as they approach
 (great for charged blasts). The scenery also leans slightly opposite to your hand for a parallax depth cue.
 
+## Two players
+
+On the choose-your-game screen pick **1 PLAYER / 2 PLAYERS**. Two-player has three games:
+
+- **VERSUS** - both players at once, highest score wins. Kills, combos, charge cells and mine penalties belong to
+  whoever fired the shot. Misses cost nobody; shooting a mine costs *you*.
+- **CO-OP** - both players at once with one shared score and combo. Misses and mines cost the whole team.
+- **DUEL** - turn-based: player 1 plays Score Attack, then player 2 plays the **identical target pattern**
+  (fixed seed, fixed difficulty curve, spawn lanes that ignore what you've shot), highest score wins.
+  Only one person needs to be in front of the camera at a time.
+
+Live games use **one camera for both**: stand side by side - P1's hand is tracked in the LEFT half of the camera
+view and P2's in the RIGHT half (the picture-in-picture shows both zones). Hands are assigned by position, and a
+hand that drifts across the middle keeps its player. Each player gets their own smoothing, gesture detector,
+silent calibration, reticle colour (cyan / magenta), score panel and charge cells. The countdown waits for both hands
+(it starts anyway after 10 s with whoever is there). Without a camera: P1 = mouse, P2 = arrow keys + Enter.
+Winners can enter a name; there are separate **Versus / Co-op / Duel** high-score tables (High Scores ->
+`SHOWING: 2 PLAYER`).
+
+**Turning it off / going back:** it all lives on the `two-player` git branch. `git checkout baseline-1p` (or
+`git checkout main`) restores the single-player game exactly as it was before; `TWO_PLAYER = False` in
+`neural/config.py` hides the PLAYERS option while keeping the code.
+
 ## Walk-up flow (built for an event)
 
 1. **Home / attract screen:** a demo plays behind a single big **PLAY** circle. Just *hold your open hand in
@@ -182,6 +205,7 @@ neural/
   hand.py                webcam + MediaPipe worker thread (fist + pinch signals, lead, recorder)
   inputs.py              InputState, MouseInput, BotInput
   replay.py              session CSV loader + ReplayInput
+  versus.py              two-player: live Versus / Co-op scene, turn-based Duel flow
   world.py               pseudo-3D targets, hitscan, blast (pure logic)
   modes.py               TimedMode, EndlessMode, level_spec()
   scoring.py             score/combo/rank + persistent high scores

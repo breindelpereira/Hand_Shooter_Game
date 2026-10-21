@@ -82,6 +82,9 @@ class App:
         self.session_trial_done = False   # reset by the idle timeout: the next visitor gets the trial
         self.idle_enabled = None          # None = auto (only when a camera is the input)
         self._last_hand = 0.0
+        self.inp2 = InputState(present=False)
+        self.players = 1                  # players in the CURRENT game (1 or 2)
+        self.want_players = 1             # what the choose screen has selected
         self.toast = None            # [text, ttl, color]
         self._fire_flash = -10.0
         self._next: Scene | None = None
@@ -124,6 +127,11 @@ class App:
             return
         self.cfg.fullscreen = on
         self.cfg.save()
+
+    def set_players(self, n: int):
+        """Switch the tracker between one hand (centre of the view) and two (left / right halves)."""
+        self.players = 2 if n >= 2 else 1
+        self.input.set_players(self.players)
 
     def base_theme(self) -> int:
         """Clock mode (the pinch gesture) lives in the pink-purple world; fist mode uses the
@@ -248,11 +256,13 @@ class App:
                         self.running = False
                     elif e.type == pygame.KEYDOWN:
                         self._on_key(e.key)
-                inp = self.input.poll(dt)
+                inps = self.input.poll_players(dt)
+                inp = inps[0]
+                self.inp2 = inps[1]                 # player 2 (absent unless a 2-player game runs)
                 self._last_inp = inp
                 if inp.fire:
                     self._fire_flash = self.clock_t
-                if inp.present:
+                if inp.present or self.inp2.present:
                     self._last_hand = self.clock_t
                 self._check_idle()
                 self.scene.update(dt, inp)
@@ -273,6 +283,7 @@ class App:
             return
         if self.clock_t - self._last_hand > C.IDLE_RESET:
             self.session_trial_done = False
+            self.want_players = 1
             if not isinstance(self.scene, (MenuScene, CalibrateScene)):
                 self.goto(MenuScene(self))
 

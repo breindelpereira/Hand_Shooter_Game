@@ -1,12 +1,16 @@
-"""Webcam -> MediaPipe HandLandmarker -> aim point + fire gesture (fist or pinch).
+"""Webcam -> MediaPipe HandLandmarker -> aim point + fire gesture (fist or pinch/"clock it").
 
 The camera/MediaPipe loop runs in its own thread so the game loop stays at 60 FPS even
-though the camera delivers ~30 FPS.  The game thread calls ``poll()`` each frame.
+though the camera delivers ~30 FPS.  The game thread calls ``poll_players()`` each frame.
 
 Two fire gestures are tracked at all times, so switching is instant:
   * "fist"  - finger-curl ratio drops when the hand closes
   * "pinch" - thumb-tip to index-tip distance (relative to palm size) drops on a pinch
 Both go through the same swing detector (filters.FistDetector).
+
+Each tracked hand lives in a ``HandChannel`` (its own smoothing, lead, detectors, silent
+calibration).  Single player uses channel 0 over the centre of the frame; two players use
+channel 0 for the LEFT half of the (mirrored) camera view and channel 1 for the RIGHT half.
 """
 from __future__ import annotations
 
@@ -38,6 +42,11 @@ GESTURES = {
                   min_sep=0.25, tip="Pinch your thumb and index finger together and hold"),
 }
 
+# camera-frame zones (cx, cy, w, h as fractions of the frame) that map onto the whole screen
+ZONE_SOLO = (C.ZONE_CX, C.ZONE_CY, C.ZONE_W, C.ZONE_H)
+ZONE_P1 = (0.27, 0.50, 0.40, 0.60)        # left half of the mirrored view
+ZONE_P2 = (0.73, 0.50, 0.40, 0.60)        # right half
+
 
 def curl_ratio(lm, aspect: float) -> float:
     """Mean fingertip-to-wrist / knuckle-to-wrist distance for the four fingers."""
@@ -67,6 +76,138 @@ def make_detector(gesture: str) -> FistDetector:
     return FistDetector(open_ref=g["open"], closed_ref=g["closed"], min_span=g["min_sep"])
 
 
+def assign_hands(palm_xs, prev):
+    """Decide which detected hand belongs to which player (index 0 = left of the view).
+
+    palm_xs: palm-centre x (0..1, mirrored view) of each detected hand.
+    prev:    last known palm x of each player's channel, or None if not recently seen.
+    Returns [index_into_palm_xs or None] for player 0 and player 1.
+    Two hands: left-most -> P1, right-most -> P2.  One hand: stick with the player whose last
+    position is nearest (so a hand drifting past the middle does not swap players); if nobody
+    was tracked yet, the side of the midline decides."""
+    n = len(palm_xs)
+    if n == 0:
+        return [None, None]
+    if n >= 2:
+        order = sorted(range(n), key=lambda i: palm_xs[i])
+        return [order[0], order[-1]]
+    x = palm_xs[0]
+    p0, p1 = prev
+    if p0 is None and p1 is None:
+        return [0, None] if x < 0.5 else [None, 0]
+    if p0 is not None and p1 is not None:
+        return [0, None] if abs(x - p0) <= abs(x - p1) else [None, 0]
+    if p0 is not None:                                   # only P1 was tracked
+        return [0, None] if (abs(x - p0) < 0.28 or x < 0.5) else [None, 0]
+    return [None, 0] if (abs(x - p1) < 0.28 or x >= 0.5) else [0, None]
+
+
+class HandChannel:
+    """Everything that belongs to ONE tracked hand: filtering, gesture detection, silent
+    calibration, and the reticle smoothing the game thread reads."""
+
+    def __init__(self, zone):
+        self.zone = zone
+        self.fx, self.fy = OneEuro(), OneEuro()
+        self.lead = LeadPredictor()
+        self.det = {g: make_detector(g) for g in GESTURES}
+        self.manual = {g: False for g in GESTURES}
+        self.adapt = {"fist": RefAdapter(self.det["fist"], (1.35, 2.5), (0.35, 1.25)),
+                      "pinch": RefAdapter(self.det["pinch"], (0.45, 1.5), (0.04, 0.45))}
+        self.sig = {g: GESTURES[g]["open"] for g in GESTURES}
+        # published by the worker thread
+        self.nx = self.ny = 0.5
+        self.ratio = GESTURES["fist"]["open"]
+        self.closed = False
+        self.present = False
+        self.lost_handled = False
+        self.last_seen = 0.0
+        self.palm_x = 0.5
+        self.fire_count = 0
+        self.fire_pos = (0.5, 0.5)
+        # owned by the game thread
+        self.seen_fire = 0
+        self.gx, self.gy = C.W / 2.0, C.H / 2.0
+        self.had_hand = False
+
+    def reset_tracking(self):
+        self.present = False
+        self.closed = False
+        self.fx.reset()
+        self.fy.reset()
+        self.lead.reset()
+        for d in self.det.values():
+            d.reset()
+
+    def recent_palm_x(self, now):
+        return self.palm_x if (self.present and now - self.last_seen < 0.6) else None
+
+    def process(self, lm, now: float, aspect: float, gesture: str):
+        """Feed one frame (lm=None when this player's hand was not seen).
+        Returns a row for the session recorder: (present, x, y, fist, pinch, closed, fired)."""
+        act = self.det[gesture]
+        if lm is None:
+            row = (False, self.nx, self.ny, None, None, self.closed, False)
+            if self.present:
+                lost_for = now - self.last_seen
+                if not self.lost_handled and lost_for > 0.06:
+                    # the tracker often drops a hand the moment it becomes a fist
+                    self.lost_handled = True
+                    closed, fired, fpos = act.lost(now)
+                    self.closed = closed
+                    if fired:
+                        self.fire_count += 1
+                        self.fire_pos = fpos
+                        row = (False, self.nx, self.ny, None, None, closed, True)
+                # a closed hand that vanishes is most likely still closed: hold longer
+                grace = 0.9 if act.closed else 0.25
+                if lost_for > grace:
+                    self.reset_tracking()
+            return row
+        self.lost_handled = False
+        fist = curl_ratio(lm, aspect)
+        pinch = pinch_ratio(lm, aspect)
+        cx, cy = palm_center(lm)
+        self.palm_x = cx
+        zcx, zcy, zw, zh = self.zone
+        zx = min(max((cx - (zcx - zw / 2)) / zw, 0.0), 1.0)
+        zy = min(max((cy - (zcy - zh / 2)) / zh, 0.0), 1.0)
+        fx, fy = self.fx(zx, now), self.fy(zy, now)
+        px, py = self.lead(now, fx, fy)                 # latency-compensated aim
+        self.sig["fist"], self.sig["pinch"] = fist, pinch
+        events = {g: d.update(now, fist if g == "fist" else pinch, px, py) for g, d in self.det.items()}
+        closed, fired, fpos = events[gesture]
+        if not self.manual[gesture]:
+            self.adapt[gesture].feed(self.sig[gesture], closed)
+        self.nx, self.ny = px, py
+        self.ratio = self.sig[gesture]
+        self.closed = closed
+        self.present = True
+        self.last_seen = now
+        if fired:
+            self.fire_count += 1
+            self.fire_pos = fpos
+        return (True, px, py, fist, pinch, closed, fired)
+
+    def to_state(self, dt: float) -> InputState:
+        """Game-thread side: ease the reticle toward the filtered hand position."""
+        if self.present:
+            tx, ty = self.nx * C.W, self.ny * C.H
+            if not self.had_hand:                       # snap on (re)acquire, don't slide in
+                self.gx, self.gy = tx, ty
+            else:
+                k = 1.0 - math.exp(-dt * C.RETICLE_FOLLOW)
+                self.gx += (tx - self.gx) * k
+                self.gy += (ty - self.gy) * k
+        self.had_hand = self.present
+        fire = self.fire_count != self.seen_fire
+        self.seen_fire = self.fire_count
+        return InputState(x=self.gx, y=self.gy, present=self.present,
+                          fist=self.closed and self.present, fire=fire and self.present,
+                          fire_x=self.fire_pos[0] * C.W, fire_y=self.fire_pos[1] * C.H,
+                          ratio=self.ratio)
+
+
 class HandInput(InputProvider):
     name = "hand"
     has_camera = True
@@ -79,33 +220,14 @@ class HandInput(InputProvider):
         self._error: str | None = None
         self._thread: threading.Thread | None = None
         self.gesture = gesture if gesture in GESTURES else "fist"
-        # state written by the worker thread
-        self._nx = self._ny = 0.5        # filtered (+ lead) aim, 0..1 over the active zone
-        self._ratio = GESTURES[self.gesture]["open"]
-        self._closed = False
-        self._present = False
-        self._lost_handled = False
-        self._last_seen = 0.0
-        self._fire_count = 0
-        self._fire_pos = (0.5, 0.5)
+        self.players = 1
+        self._want_hands = 1
+        self.chs = [HandChannel(ZONE_SOLO), HandChannel(ZONE_P2)]
+        self._assign = [None, None]
         self._preview = None
         self.fps = 0.0
         self.brightness = 255.0
-        # state owned by the game thread
-        self._seen_fire = 0
-        self._x, self._y = C.W / 2.0, C.H / 2.0
-        self._had_hand = False
-        # processing objects
-        self._fx, self._fy = OneEuro(), OneEuro()
-        self._lead = LeadPredictor()
-        self._det = {g: make_detector(g) for g in GESTURES}
-        # silent calibration: learn the player's open/closed levels while they play, unless a
-        # manual calibration was loaded / run for that gesture
-        self._manual = {g: False for g in GESTURES}
-        self._adapt = {"fist": RefAdapter(self._det["fist"], (1.35, 2.5), (0.35, 1.25)),
-                       "pinch": RefAdapter(self._det["pinch"], (0.45, 1.5), (0.04, 0.45))}
-        self._sig = {g: GESTURES[g]["open"] for g in GESTURES}
-        # session recording (F8)
+        # session recording (F8) - records player 1's channel
         self._rec: list | None = None
         self._rec_t0 = 0.0
 
@@ -128,7 +250,7 @@ class HandInput(InputProvider):
     # ---- configuration -------------------------------------------------------
     @property
     def _active(self) -> FistDetector:
-        return self._det[self.gesture]
+        return self.chs[0].det[self.gesture]
 
     def spec(self) -> dict:
         return GESTURES[self.gesture]
@@ -137,15 +259,32 @@ class HandInput(InputProvider):
         if name in GESTURES and name != self.gesture:
             with self._lock:
                 self.gesture = name
-                self._closed = self._det[name].closed
-                self._ratio = self._sig[name]
+                for ch in self.chs:
+                    ch.closed = ch.det[name].closed
+                    ch.ratio = ch.sig[name]
+
+    def set_players(self, n: int):
+        """1 = one hand over the middle of the view; 2 = left half / right half."""
+        n = 2 if n >= 2 else 1
+        with self._lock:
+            if n == self.players:
+                return
+            self.players = n
+            self._want_hands = n
+            self.chs[0].zone = ZONE_P1 if n == 2 else ZONE_SOLO
+            self.chs[1].zone = ZONE_P2
+            for ch in self.chs:
+                ch.reset_tracking()
+                ch.had_hand = False
 
     def set_calibration(self, open_ratio: float, closed_ratio: float, gesture: str | None = None) -> bool:
         g = gesture or self.gesture
         with self._lock:
-            ok = self._det[g].calibrate(open_ratio, closed_ratio)
-            if ok:
-                self._manual[g] = True
+            ok = False
+            for ch in self.chs:
+                ok = ch.det[g].calibrate(open_ratio, closed_ratio) or ok
+                if ok:
+                    ch.manual[g] = True
             return ok
 
     def thresholds(self):
@@ -155,8 +294,9 @@ class HandInput(InputProvider):
     def meter(self):
         """(value, closed_ref, gate_hi, open_ref, closed) for the on-screen gesture meter."""
         d = self._active
+        ch = self.chs[0]
         with self._lock:
-            return self._ratio, d.closed_ref, d.gate_hi, d.open_ref, self._closed
+            return ch.ratio, d.closed_ref, d.gate_hi, d.open_ref, ch.closed
 
     # ---- session recording ---------------------------------------------------
     @property
@@ -172,7 +312,7 @@ class HandInput(InputProvider):
         """Write the CSV and return its path (or None if nothing was recorded)."""
         with self._lock:
             rows, self._rec = self._rec, None
-            d = {g: (self._det[g].open_ref, self._det[g].closed_ref) for g in GESTURES}
+            d = {g: (self.chs[0].det[g].open_ref, self.chs[0].det[g].closed_ref) for g in GESTURES}
             active = self.gesture
         if not rows:
             return None
@@ -194,6 +334,19 @@ class HandInput(InputProvider):
         import mediapipe as mp
         from mediapipe.tasks.python import BaseOptions, vision
 
+        def make_landmarker(n_hands: int):
+            opts = vision.HandLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=str(C.MODEL_PATH)),
+                running_mode=vision.RunningMode.VIDEO,
+                num_hands=n_hands,
+                # lower than the 0.5 defaults: a quickly closing fist is the pose MediaPipe
+                # is most likely to drop, and losing the hand mid-flick means a missed shot
+                min_hand_detection_confidence=0.4,
+                min_hand_presence_confidence=0.3,
+                min_tracking_confidence=0.3,
+            )
+            return vision.HandLandmarker.create_from_options(opts)
+
         cap = None
         try:
             backend = getattr(cv2, "CAP_DSHOW", 0) if __import__("sys").platform == "win32" else 0
@@ -204,18 +357,8 @@ class HandInput(InputProvider):
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, C.CAM_H)
             cap.set(cv2.CAP_PROP_FPS, 30)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            opts = vision.HandLandmarkerOptions(
-                base_options=BaseOptions(model_asset_path=str(C.MODEL_PATH)),
-                running_mode=vision.RunningMode.VIDEO,
-                num_hands=1,
-                # lower than the 0.5 defaults: a quickly closing fist is the pose MediaPipe
-                # is most likely to drop, and losing the hand mid-flick means a missed shot
-                min_hand_detection_confidence=0.4,
-                min_hand_presence_confidence=0.3,
-                min_tracking_confidence=0.3,
-            )
-            landmarker = vision.HandLandmarker.create_from_options(opts)
+            cur_hands = self._want_hands
+            landmarker = make_landmarker(cur_hands)
         except Exception as exc:  # noqa: BLE001 - report to the main thread
             self._error = str(exc)
             self._ready.set()
@@ -229,6 +372,12 @@ class HandInput(InputProvider):
         frames, fps_t = 0, t0
         try:
             while not self._stop.is_set():
+                if self._want_hands != cur_hands:        # 1 <-> 2 players: rebuild the tracker
+                    landmarker.close()
+                    cur_hands = self._want_hands
+                    landmarker = make_landmarker(cur_hands)
+                    last_ts = -1
+                    t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok:
                     time.sleep(0.01)
@@ -244,9 +393,9 @@ class HandInput(InputProvider):
                 res = landmarker.detect_for_video(
                     mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
 
-                lm = res.hand_landmarks[0] if res.hand_landmarks else None
-                self._process(lm, now, w, h)
-                self._make_preview(cv2, frame, lm, w, h)
+                lms = list(res.hand_landmarks) if res.hand_landmarks else []
+                self._process(lms, now, w, h)
+                self._make_preview(cv2, frame, lms, w, h)
 
                 frames += 1
                 if now - fps_t >= 1.0:
@@ -256,82 +405,50 @@ class HandInput(InputProvider):
             landmarker.close()
             cap.release()
 
-    def _record(self, now, present, x, y, fist, pinch, closed, fired):
+    def _record(self, now, row):
         if self._rec is not None:
+            present, x, y, fist, pinch, closed, fired = row
             self._rec.append((round(now - self._rec_t0, 4), int(present), round(x, 4), round(y, 4),
                               "" if fist is None else round(fist, 4),
                               "" if pinch is None else round(pinch, 4), int(closed), int(fired)))
 
-    def _process(self, lm, now: float, w: int, h: int):
+    def _process(self, lms, now: float, w: int, h: int):
         with self._lock:
-            act = self._active
-            if lm is None:
-                self._record(now, False, self._nx, self._ny, None, None, self._closed, False)
-                if self._present:
-                    lost_for = now - self._last_seen
-                    if not self._lost_handled and lost_for > 0.06:
-                        # the tracker often drops a hand the moment it becomes a fist
-                        self._lost_handled = True
-                        closed, fired, fpos = act.lost(now)
-                        self._closed = closed
-                        if fired:
-                            self._fire_count += 1
-                            self._fire_pos = fpos
-                    # a closed hand that vanishes is most likely still closed: hold longer
-                    grace = 0.9 if act.closed else 0.25
-                    if lost_for > grace:
-                        self._present = False
-                        self._closed = False
-                        self._fx.reset()
-                        self._fy.reset()
-                        self._lead.reset()
-                        for d in self._det.values():
-                            d.reset()
-                return
-            self._lost_handled = False
             aspect = w / h
-            fist = curl_ratio(lm, aspect)
-            pinch = pinch_ratio(lm, aspect)
-            cx, cy = palm_center(lm)
-            # map the active zone of the camera frame to 0..1
-            zx = (cx - (C.ZONE_CX - C.ZONE_W / 2)) / C.ZONE_W
-            zy = (cy - (C.ZONE_CY - C.ZONE_H / 2)) / C.ZONE_H
-            zx = min(max(zx, 0.0), 1.0)
-            zy = min(max(zy, 0.0), 1.0)
-            fx, fy = self._fx(zx, now), self._fy(zy, now)
-            px, py = self._lead(now, fx, fy)      # latency-compensated aim
-            self._sig["fist"], self._sig["pinch"] = fist, pinch
-            events = {}
-            for g, det in self._det.items():
-                events[g] = det.update(now, fist if g == "fist" else pinch, px, py)
-            closed, fired, fpos = events[self.gesture]
-            if not self._manual[self.gesture]:
-                self._adapt[self.gesture].feed(self._sig[self.gesture], closed)
-            self._nx, self._ny = px, py
-            self._ratio = self._sig[self.gesture]
-            self._closed = closed
-            self._present = True
-            self._last_seen = now
-            if fired:
-                self._fire_count += 1
-                self._fire_pos = fpos
-            self._record(now, True, px, py, fist, pinch, closed, fired)
+            if self.players == 1:
+                assign = [0 if lms else None, None]
+            else:
+                prev = [ch.recent_palm_x(now) for ch in self.chs]
+                assign = assign_hands([palm_center(lm)[0] for lm in lms], prev)
+            self._assign = assign
+            rows = []
+            for i, ch in enumerate(self.chs):
+                idx = assign[i]
+                rows.append(ch.process(lms[idx] if idx is not None else None, now, aspect, self.gesture))
+            self._record(now, rows[0])
 
-    def _make_preview(self, cv2, frame, lm, w, h):
-        # zone rectangle
-        x0 = int((C.ZONE_CX - C.ZONE_W / 2) * w)
-        x1 = int((C.ZONE_CX + C.ZONE_W / 2) * w)
-        y0 = int((C.ZONE_CY - C.ZONE_H / 2) * h)
-        y1 = int((C.ZONE_CY + C.ZONE_H / 2) * h)
-        cv2.rectangle(frame, (x0, y0), (x1, y1), (255, 229, 0), 2)
-        if lm is not None:
+    def _make_preview(self, cv2, frame, lms, w, h):
+        with self._lock:
+            assign = list(self._assign)
+            zones = [self.chs[0].zone] + ([self.chs[1].zone] if self.players == 2 else [])
+            closed = [ch.closed for ch in self.chs]
+            gesture = self.gesture
+        colors = [(255, 229, 0), (255, 80, 220)]            # BGR-ish tints: cyan-ish / magenta-ish
+        for i, (zcx, zcy, zw, zh) in enumerate(zones):
+            x0, x1 = int((zcx - zw / 2) * w), int((zcx + zw / 2) * w)
+            y0, y1 = int((zcy - zh / 2) * h), int((zcy + zh / 2) * h)
+            cv2.rectangle(frame, (x0, y0), (x1, y1), colors[i], 2)
+        for pi, idx in enumerate(assign):
+            if idx is None or idx >= len(lms):
+                continue
+            lm = lms[idx]
             pts = [(int(p.x * w), int(p.y * h)) for p in lm]
-            col = (80, 255, 120) if self._closed else (255, 255, 255)
+            col = (80, 255, 120) if closed[pi] else (255, 255, 255)
             for a, b in _CONNECTIONS:
                 cv2.line(frame, pts[a], pts[b], col, 2)
             for p in pts:
                 cv2.circle(frame, p, 3, (60, 60, 255), -1)
-            if self.gesture == "pinch":                     # show what the pinch detector sees
+            if gesture == "pinch":                           # show what the pinch detector sees
                 cv2.line(frame, pts[4], pts[8], (0, 200, 255), 3)
         small = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
         small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
@@ -344,25 +461,9 @@ class HandInput(InputProvider):
         with self._lock:
             return None if self._preview is None else self._preview.copy()
 
-    def poll(self, dt: float) -> InputState:
+    def poll_players(self, dt: float):
         with self._lock:
-            present = self._present
-            nx, ny = self._nx, self._ny
-            closed = self._closed
-            ratio = self._ratio
-            fc = self._fire_count
-            fpos = self._fire_pos
-        if present:
-            tx, ty = nx * C.W, ny * C.H
-            if not self._had_hand:                 # snap on (re)acquire, don't slide in
-                self._x, self._y = tx, ty
-            else:
-                k = 1.0 - math.exp(-dt * C.RETICLE_FOLLOW)
-                self._x += (tx - self._x) * k
-                self._y += (ty - self._y) * k
-        self._had_hand = present
-        fire = fc != self._seen_fire
-        self._seen_fire = fc
-        return InputState(x=self._x, y=self._y, present=present, fist=closed and present,
-                          fire=fire and present, fire_x=fpos[0] * C.W, fire_y=fpos[1] * C.H,
-                          ratio=ratio)
+            return [self.chs[0].to_state(dt), self.chs[1].to_state(dt)]
+
+    def poll(self, dt: float) -> InputState:
+        return self.poll_players(dt)[0]

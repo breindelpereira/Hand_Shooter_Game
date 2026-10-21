@@ -181,8 +181,8 @@ def draw_boss_tethers(dst, boss, world, now):
 
 
 def draw_reticle(dst, x, y, now, fist, locked, charge, charge_ready, overcharge,
-                 present=True, pulse=0.0, lock_prog=0.0):
-    col = C.GREEN if locked else C.CYAN
+                 present=True, pulse=0.0, lock_prog=0.0, tint=None):
+    col = C.GREEN if locked else (tint or C.CYAN)
     if not present:
         col = C.GREY
     ix, iy = int(x), int(y)

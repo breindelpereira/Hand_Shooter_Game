@@ -85,6 +85,9 @@ OVERCHARGE_SPREAD = 78            # px
 
 NAME_MAX = 20                     # longest high-score name
 
+# ---- two-player (set False to hide it everywhere; or `git checkout baseline-1p`) ----
+TWO_PLAYER = True
+
 # ---- walk-up / event flow ----------------------------------------------------
 IDLE_RESET = 15.0                 # seconds with no hand in view -> back to the attract screen
 PLAY_DWELL = 1.0                  # hold your hand in the big PLAY circle this long to start

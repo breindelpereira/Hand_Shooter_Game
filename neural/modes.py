@@ -75,8 +75,9 @@ class TimedMode(Mode):
     title = "SCORE ATTACK"
 
     def __init__(self, world, scoring, rng=None, duration: float = C.TIMED_DURATION,
-                 lives: int | None = C.TIMED_LIVES):
+                 lives: int | None = C.TIMED_LIVES, adaptive: bool = True):
         super().__init__(world, scoring, rng)
+        self.adaptive = adaptive         # False: a fixed, identical-every-time curve (Duel)
         self.duration = duration
         self.cd = C.TIMED_COUNTDOWN
         self._last_tick = int(math.ceil(self.cd)) + 1
@@ -117,8 +118,12 @@ class TimedMode(Mode):
         if self._idle > 3.0:                     # nothing being hit: ease off
             self.heat -= 0.025 * dt
         self.heat = clamp(self.heat)
-        # time still matters a little (late game can go higher), performance matters most
-        target = clamp(0.10 + 0.90 * self.heat * (0.45 + 0.55 * self.d))
+        if not self.adaptive:
+            # fixed curve: identical for every player, so two turns are directly comparable
+            target = 0.12 + 0.50 * smoothstep(0.0, 1.0, self.d)
+        else:
+            # time still matters a little (late game can go higher), performance matters most
+            target = clamp(0.10 + 0.90 * self.heat * (0.45 + 0.55 * self.d))
         self._int += (target - self._int) * min(1.0, dt * 0.8)
         sc.bonus = 1.0 + 0.6 * self._int         # harder play pays more
 

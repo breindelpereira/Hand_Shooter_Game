@@ -89,6 +89,7 @@ class World:
         self.base_speed = 1.0         # set by the mode (difficulty)
         self.time_scale = 1.0         # set by time-warp
         self.scroll = 0.0             # tunnel scroll distance (for visuals)
+        self.fair_spawns = False      # True: lane choice ignores existing targets (identical Duel turns)
 
     # ---- helpers ---------------------------------------------------------
     @staticmethod
@@ -108,7 +109,8 @@ class World:
     def pick_lane(self, tries: int = 7):
         """Random (x, y) that is far from targets still near the spawn depth."""
         best, best_d = (0.0, 0.0), -1.0
-        near = [(t.x, t.y) for t in self.targets if t.alive and t.z > C.Z_FAR * 0.55]
+        near = [] if self.fair_spawns else \
+            [(t.x, t.y) for t in self.targets if t.alive and t.z > C.Z_FAR * 0.55]
         for _ in range(tries):
             x = self.rng.uniform(-C.X_RANGE, C.X_RANGE)
             y = self.rng.uniform(-C.Y_RANGE, C.Y_RANGE)

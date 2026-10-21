@@ -48,13 +48,19 @@ class Scene:
 
 # =============================================================== PLAY
 class PlayScene(Scene):
-    def __init__(self, app, mode_key: str, demo: bool = False):
+    def __init__(self, app, mode_key: str, demo: bool = False, seed=None, adaptive: bool = True,
+                 on_finish=None, label: str | None = None):
         super().__init__(app)
         self.mode_key = mode_key
         self.demo = demo
         self.autofire = bool(app.cfg.autofire) and not demo
         self.table = mode_key + ("_easy" if self.autofire else "")   # high-score table key
-        self.rng = random.Random()
+        self.adaptive = adaptive
+        self.seeded = seed is not None
+        self.on_finish = on_finish       # Duel: receives the stats instead of showing the results screen
+        self.label = label               # e.g. "PLAYER 1"
+        self.rng = random.Random(seed)   # drives spawns only (so a seed gives identical targets) ...
+        self.jit_rng = random.Random()   # ... effects / EMP jitter use their own generators
         self._new_run()
         # in-game MENU button: click-only (a long dwell is never reached), so aiming across it is safe
         self.menu_btn = Button((14, 158, 128, 42), "MENU", "menu", C.GREY, size=22, dwell=999.0)
@@ -66,13 +72,15 @@ class PlayScene(Scene):
     def _new_run(self):
         a = self.app
         self.world = World(self.rng)
+        self.world.fair_spawns = self.seeded            # seeded runs (Duel) must not depend on the player
         self.scoring = Scoring()
         if self.mode_key == "timed":
             self.mode = TimedMode(self.world, self.scoring, self.rng,
-                                  duration=a.cfg.duration, lives=a.cfg.timed_lives)
+                                  duration=a.cfg.duration, lives=a.cfg.timed_lives,
+                                  adaptive=self.adaptive)
         else:
             self.mode = EndlessMode(self.world, self.scoring, self.rng)
-        self.fx = FX(self.rng)
+        self.fx = FX(random.Random())
         self.bot = BotInput(self.world, skill=0.8, rng=random.Random(self.rng.random())) if self.demo else None
         if self.demo:
             self.mode.phase = "play"
@@ -131,8 +139,8 @@ class PlayScene(Scene):
         self.rx, self.ry = inp.x, inp.y
         fx_x, fx_y = inp.fire_x, inp.fire_y
         if mode.emp > 0:
-            self.jx += (self.rng.uniform(-45, 45) - self.jx) * min(1.0, dt * 18)
-            self.jy += (self.rng.uniform(-45, 45) - self.jy) * min(1.0, dt * 18)
+            self.jx += (self.jit_rng.uniform(-45, 45) - self.jx) * min(1.0, dt * 18)
+            self.jy += (self.jit_rng.uniform(-45, 45) - self.jy) * min(1.0, dt * 18)
             self.rx += self.jx
             self.ry += self.jy
             fx_x += self.jx
@@ -469,6 +477,9 @@ class PlayScene(Scene):
                      level=level, by_kind=dict(sc.by_kind), perfects=sc.perfects,
                      lives_end=mode.lives, rank=S.rank_for(self.mode_key, sc.score,
                                                            sc.accuracy, level))
+        if self.on_finish is not None:
+            self.on_finish(stats)
+            return
         a.goto(ResultsScene(a, stats))
 
     def on_key(self, key):
@@ -507,7 +518,7 @@ class PlayScene(Scene):
                          present=not self.frozen, pulse=self.pulse)
             self._draw_hud(dst, now)
         if mode.emp > 0:
-            rng = self.rng
+            rng = self.jit_rng
             for _ in range(14):
                 y = rng.randrange(0, C.H)
                 pygame.draw.line(dst, (80, 20, 30), (0, y), (C.W, y), rng.choice((1, 1, 2)))
@@ -537,6 +548,8 @@ class PlayScene(Scene):
     def _draw_hud(self, dst, now):
         a, sc, mode = self.app, self.scoring, self.mode
         self.menu_btn.draw(dst, now)
+        if self.label:
+            draw_text(dst, self.label, 26, C.GOLD, (C.CX, 168), glow=False)
         # ---- score block
         draw_hud_panel(dst, (12, 6, 312, 138), C.CYAN)
         draw_text(dst, "SCORE", 18, C.GREY, (28, 14), "topleft", glow=False)
@@ -812,18 +825,25 @@ class MenuScene(Scene):
 
 # =============================================================== PICK (mode / difficulty / fire gesture)
 class PickScene(Scene):
-    """Two big game cards, plus simple either/or choices for difficulty and fire gesture."""
+    """Game cards, plus simple either/or choices for players, difficulty and fire gesture."""
 
     show_guide = True
     pip_scale = 1.0
 
+    CARDS_1P = (("timed", "SCORE ATTACK", C.CYAN, "60 seconds. Hit as many", "targets as you can."),
+                ("endless", "SURVIVAL", C.MAGENTA, "3 lives. Clear level after", "level. How far can you get?"))
+    CARDS_2P = (("versus", "VERSUS", C.CYAN, "Both at once.", "Highest score wins."),
+                ("coop", "CO-OP", C.GREEN, "Both at once. One", "shared team score."),
+                ("duel", "DUEL", C.GOLD, "Take turns on the", "SAME targets."))
+
     def __init__(self, app):
         super().__init__(app)
         cx = C.CX
-        self.modes = [
-            Button((cx - 450, 120, 430, 214), "", "timed", C.CYAN),
-            Button((cx + 20, 120, 430, 214), "", "endless", C.MAGENTA),
+        self.players = [
+            Button((cx - 232, 80, 222, 48), "1 PLAYER", "p1", C.CYAN, size=26),
+            Button((cx + 10, 80, 222, 48), "2 PLAYERS", "p2", C.MAGENTA, size=26),
         ]
+        self.modes: list[Button] = []
         self.diff = [
             Button((cx - 262, 420, 252, 72), "EASY", "easy", C.GREEN, size=30, sub="you aim - it fires for you"),
             Button((cx + 10, 420, 252, 72), "NORMAL", "normal", C.CYAN, size=30, sub="you aim and shoot"),
@@ -835,14 +855,29 @@ class PickScene(Scene):
         self.back = Button((24, C.H - 84, 190, 58), "BACK", "back", C.GREY, size=24)
         self._sync()
 
+    def _cards(self):
+        return self.CARDS_2P if self.app.want_players == 2 else self.CARDS_1P
+
+    def _build_cards(self):
+        cards = self._cards()
+        n = len(cards)
+        w = 430 if n == 2 else 300
+        gap = 20
+        x0 = C.CX - (n * w + (n - 1) * gap) // 2
+        self.modes = [Button((x0 + i * (w + gap), 142, w, 196), "", c[0], c[2]) for i, c in enumerate(cards)]
+
     def _sync(self):
         a = self.app
+        two = a.want_players == 2
+        self.players[0].selected = not two
+        self.players[1].selected = two
         self.diff[0].selected = bool(a.cfg.autofire)
         self.diff[1].selected = not a.cfg.autofire
         self.fire[0].selected = a.cfg.gesture == "fist"
         self.fire[1].selected = a.cfg.gesture == "pinch"
         for b in self.fire:
             b.enabled = a.input.has_camera
+        self._build_cards()
 
     def enter(self):
         self.app.audio.sfx_muted = False
@@ -854,9 +889,17 @@ class PickScene(Scene):
 
     def _start(self, mode: str):
         a = self.app
-        make = lambda: PlayScene(a, mode)          # noqa: E731
+        if mode in ("versus", "coop", "duel"):
+            from .versus import DuelFlow, DuelInterlude, VersusScene
+            if mode == "duel":
+                flow = DuelFlow(a)
+                make = lambda: DuelInterlude(a, flow, 1)            # noqa: E731
+            else:
+                make = lambda: VersusScene(a, coop=(mode == "coop"))   # noqa: E731
+        else:
+            make = lambda: PlayScene(a, mode)                       # noqa: E731
         if a.input.has_camera and not a.session_trial_done:
-            a.goto(TrialScene(a, make))             # a quick 10-second "try it" for new players
+            a.goto(TrialScene(a, make))            # a quick 10-second "try it" for new players
         else:
             a.goto(make())
 
@@ -865,11 +908,15 @@ class PickScene(Scene):
         a = self.app
         self._inp = inp
         locked = self.age < C.UI_LOCK_TIME
-        b = update_buttons(self.modes + self.diff + self.fire + [self.back], dt, inp, locked, a.audio)
+        row = (self.players if C.TWO_PLAYER else []) + self.modes + self.diff + self.fire + [self.back]
+        b = update_buttons(row, dt, inp, locked, a.audio)
         if b is None:
             return
         act = b.action
-        if act in ("timed", "endless"):
+        if act in ("p1", "p2"):
+            a.want_players = 2 if act == "p2" else 1
+            self._sync()
+        elif act in ("timed", "endless", "versus", "coop", "duel"):
             self._start(act)
         elif act == "easy" or act == "normal":
             a.cfg.autofire = act == "easy"
@@ -882,11 +929,14 @@ class PickScene(Scene):
             a.goto(MenuScene(a))
 
     def _best(self, mode):
-        table = mode + ("_easy" if self.app.cfg.autofire else "")
+        if mode in ("timed", "endless"):
+            table = mode + ("_easy" if self.app.cfg.autofire else "")
+        else:
+            table = mode
         e = (S.top_scores(table, 1) or [None])[0]
         if not e:
             return "NO SCORE YET"
-        return f"BEST  {e['score']:,}" if mode == "timed" else f"BEST  LEVEL {e.get('level', 0)}"
+        return f"BEST  LEVEL {e.get('level', 0)}" if mode == "endless" else f"BEST  {e['score']:,}"
 
     def draw(self, dst):
         a = self.app
@@ -896,15 +946,17 @@ class PickScene(Scene):
         veil = pygame.Surface((C.W, C.H), pygame.SRCALPHA)
         veil.fill((2, 3, 14, 110))
         dst.blit(veil, (0, 0))
-        draw_text(dst, "CHOOSE YOUR GAME", 50, C.CYAN, (C.CX, 64))
-        cards = ((self.modes[0], "SCORE ATTACK", "60 seconds. Hit as many", "targets as you can.", "timed"),
-                 (self.modes[1], "SURVIVAL", "3 lives. Clear level after", "level. How far can you get?", "endless"))
-        for btn, title, l1, l2, mode in cards:
+        draw_text(dst, "CHOOSE YOUR GAME", 46 if C.TWO_PLAYER else 50, C.CYAN, (C.CX, 44 if C.TWO_PLAYER else 64))
+        if C.TWO_PLAYER:
+            for b in self.players:
+                b.draw(dst, now)
+        for btn, card in zip(self.modes, self._cards()):
+            mode, title, _col, l1, l2 = card
             btn.draw(dst, now)
             r = btn.rect
-            draw_text(dst, title, 42, btn.color, (r.centerx, r.top + 54))
-            draw_text(dst, l1, 22, C.WHITE, (r.centerx, r.top + 108), glow=False)
-            draw_text(dst, l2, 22, C.WHITE, (r.centerx, r.top + 138), glow=False)
+            draw_text(dst, title, 42 if len(self.modes) == 2 else 38, btn.color, (r.centerx, r.top + 54))
+            draw_text(dst, l1, 21, C.WHITE, (r.centerx, r.top + 108), glow=False)
+            draw_text(dst, l2, 21, C.WHITE, (r.centerx, r.top + 138), glow=False)
             draw_text(dst, self._best(mode), 22, C.GOLD, (r.centerx, r.bottom - 34), glow=False)
         draw_text(dst, "DIFFICULTY", 20, C.GREY, (C.CX, 398), glow=False)
         for b in self.diff:
@@ -916,6 +968,11 @@ class PickScene(Scene):
         draw_text(dst, note, 20, C.GREY, (C.CX, 524), glow=False)
         for b in self.fire:
             b.draw(dst, now)
+        if a.want_players == 2:
+            msg = "stand side by side: P1 on the LEFT of the camera view, P2 on the RIGHT"
+            if not cam:
+                msg = "no camera: P1 = mouse, P2 = arrow keys + Enter"
+            draw_text(dst, msg, 20, C.MAGENTA, (C.CX, 640), glow=False)
         self.back.draw(dst, now)
         inp = getattr(self, "_inp", None)
         if inp is not None:
@@ -1486,7 +1543,8 @@ class ResultsScene(Scene):
         a = self.app
         a.audio.sfx_muted = False
         a.audio.set_intensity(0.2)
-        a.audio.play("level_clear" if self.s["rank"] in "SAB" else "game_over", 0.7)
+        good = self.s.get("celebrate", self.s["rank"] in "SAB")
+        a.audio.play("level_clear" if good else "game_over", 0.7)
 
     # ---- name editing
     def _add(self, ch: str):
@@ -1508,8 +1566,8 @@ class ResultsScene(Scene):
         locked = self.age < 1.0
         if self.age > 1.4 and not self.audio_done:
             self.audio_done = True
-            col = RANK_COLORS.get(self.s["rank"], C.GREY)
-            self.fx.explosion(C.CX + 330, 250, col, 1.6, big=self.s["rank"] in "SA")
+            col = self.s.get("rank_color") or RANK_COLORS.get(self.s["rank"], C.GREY)
+            self.fx.explosion(C.CX + 330, 250, col, 1.6, big=bool(self.s.get("celebrate", self.s["rank"] in "SA")))
             a.audio.play("explode", 0.6)
         if self.entering and not self.saved:
             for b in self.letter_btns:
@@ -1532,7 +1590,8 @@ class ResultsScene(Scene):
             if b.update(dt, inp, locked):
                 a.audio.play("click")
                 if b.action == "again":
-                    a.goto(PlayScene(a, self.s["mode"]))
+                    again = self.s.get("again")
+                    a.goto(again() if again else PlayScene(a, self.s["mode"]))
                 else:
                     a.goto(MenuScene(a))
                 return
@@ -1592,8 +1651,9 @@ class ResultsScene(Scene):
         veil = pygame.Surface((C.W, C.H), pygame.SRCALPHA)
         veil.fill((2, 3, 14, 120))
         dst.blit(veil, (0, 0))
-        title = "TIME!" if s["mode"] == "timed" else "SYSTEM FAILURE"
-        draw_text(dst, title, 70, C.GOLD if s["mode"] == "timed" else C.RED, (C.CX, 62))
+        title = s.get("title") or ("TIME!" if s["mode"] == "timed" else "SYSTEM FAILURE")
+        tcol = s.get("title_color") or (C.GOLD if s["mode"] in ("timed", "versus", "coop", "duel") else C.RED)
+        draw_text(dst, title, 70 if len(title) < 16 else 58, tcol, (C.CX, 62))
         if s.get("easy"):
             draw_text(dst, "EASY MODE - AUTO FIRE", 20, C.GREEN, (C.CX, 112), glow=False)
         draw_hud_panel(dst, (C.CX - 520, 130, 640, 244), C.CYAN)
@@ -1607,6 +1667,9 @@ class ResultsScene(Scene):
             rows.append(("MISSED", f"{s['leaks']}"))
         row_cols = {"SCORE": C.GOLD, "ACCURACY": C.GREEN, "BEST COMBO": C.ORANGE, "TARGETS": C.CYAN,
                     "MISSED": C.RED, "LEVEL REACHED": C.MAGENTA}
+        if s.get("rows"):                                   # 2-player screens supply their own rows
+            rows = [(k, v) for k, v, _c in s["rows"]]
+            row_cols = {k: c for k, _v, c in s["rows"]}
         for i, (k, v) in enumerate(rows):
             y = 148 + i * 43
             reveal = min(1.0, max(0.0, (self.age - 0.15 * i) * 4))
@@ -1615,10 +1678,11 @@ class ResultsScene(Scene):
             draw_text(dst, v, 34, rc, (C.CX + 80, y), "topright", fade=reveal)
         # rank
         if self.age > 1.2:
-            col = RANK_COLORS.get(s["rank"], C.GREY)
+            col = s.get("rank_color") or RANK_COLORS.get(s["rank"], C.GREY)
             k = min(1.0, (self.age - 1.2) * 4)
-            draw_text(dst, "RANK", 22, C.GREY, (C.CX + 330, 150), glow=False)
-            draw_text(dst, s["rank"], int(170 * (0.6 + 0.4 * k)), col, (C.CX + 330, 262), fade=k)
+            draw_text(dst, "WINNER" if s.get("rank_color") else "RANK", 22, C.GREY, (C.CX + 330, 150), glow=False)
+            base = 170 if len(s["rank"]) <= 1 else 120
+            draw_text(dst, s["rank"], int(base * (0.6 + 0.4 * k)), col, (C.CX + 330, 262), fade=k)
         self.fx.draw(dst)
 
         if self.entering and not self.saved:
@@ -1642,14 +1706,20 @@ class ResultsScene(Scene):
 class ScoresScene(Scene):
     def __init__(self, app):
         super().__init__(app)
-        self.back = Button((C.CX - 280, C.H - 100, 260, 60), "BACK", "back", C.CYAN, size=28)
+        self.back = Button((C.CX - 440, C.H - 100, 200, 60), "BACK", "back", C.CYAN, size=28)
         self.easy = bool(app.cfg.autofire)
-        self.tab = Button((C.CX + 20, C.H - 100, 260, 60), "", "tab", C.GREEN, size=22)
+        self.pair = False                       # False: solo tables, True: 2-player tables
+        self.tab = Button((C.CX - 220, C.H - 100, 290, 60), "", "tab", C.GREEN, size=22)
+        self.who = Button((C.CX + 90, C.H - 100, 330, 60), "", "who", C.MAGENTA, size=22)
         self._sync_tab()
 
     def _sync_tab(self):
         self.tab.label = "SHOWING: EASY (AUTO-FIRE)" if self.easy else "SHOWING: NORMAL"
         self.tab.color = C.GREEN if self.easy else C.CYAN
+        self.tab.enabled = not self.pair
+        self.who.label = "SHOWING: 2 PLAYER" if self.pair else "SHOWING: SOLO"
+        self.who.color = C.MAGENTA if self.pair else C.GOLD
+        self.who.enabled = C.TWO_PLAYER
 
     def update(self, dt, inp):
         super().update(dt, inp)
@@ -1662,6 +1732,10 @@ class ScoresScene(Scene):
             self.app.audio.play("click")
             self.easy = not self.easy
             self._sync_tab()
+        elif self.who.update(dt, inp, locked):
+            self.app.audio.play("click")
+            self.pair = not self.pair
+            self._sync_tab()
 
     def on_key(self, key):
         if key == pygame.K_ESCAPE:
@@ -1672,32 +1746,44 @@ class ScoresScene(Scene):
         now = a.clock_t
         a.tunnel.set_theme(a.base_theme())
         a.tunnel.draw(dst, now * 5, 0.3, dt=1 / 60)
-        draw_text(dst, "HIGH SCORES" + ("  -  EASY" if self.easy else ""), 70, C.GOLD, (C.CX, 70))
-        suffix = "_easy" if self.easy else ""
-        for col, (mode, title, colr) in enumerate((("timed", "SCORE ATTACK", C.CYAN),
-                                                   ("endless", "SURVIVAL", C.MAGENTA))):
-            x0 = 90 + col * 590
-            draw_panel(dst, (x0, 130, 560, 460), border=colr)
-            draw_text(dst, title, 34, colr, (x0 + 280, 165))
+        if self.pair:
+            heading = "HIGH SCORES  -  2 PLAYER"
+            panels = (("versus", "VERSUS", C.CYAN), ("coop", "CO-OP", C.GREEN), ("duel", "DUEL", C.GOLD))
+            suffix = ""
+        else:
+            heading = "HIGH SCORES" + ("  -  EASY" if self.easy else "")
+            panels = (("timed", "SCORE ATTACK", C.CYAN), ("endless", "SURVIVAL", C.MAGENTA))
+            suffix = "_easy" if self.easy else ""
+        draw_text(dst, heading, 70, C.GOLD, (C.CX, 70))
+        n = len(panels)
+        pw = 560 if n == 2 else 380
+        gap = 30 if n == 2 else 20
+        left = C.CX - (n * pw + (n - 1) * gap) // 2
+        for col, (mode, title, colr) in enumerate(panels):
+            x0 = left + col * (pw + gap)
+            draw_panel(dst, (x0, 130, pw, 460), border=colr)
+            draw_text(dst, title, 34, colr, (x0 + pw // 2, 165))
             rows = S.top_scores(mode + suffix, 10)
             if not rows:
-                draw_text(dst, "no scores yet", 24, C.GREY, (x0 + 280, 330), glow=False)
+                draw_text(dst, "no scores yet", 24, C.GREY, (x0 + pw // 2, 330), glow=False)
             for i, e in enumerate(rows):
                 y = 205 + i * 37
                 medal = (C.GOLD, (215, 225, 240), (232, 150, 92)).__getitem__(i) if i < 3 else C.GREY
-                draw_text(dst, f"{i + 1:>2}.", 22, medal, (x0 + 18, y), "topleft", glow=False)
+                draw_text(dst, f"{i + 1:>2}.", 22, medal, (x0 + 14, y), "topleft", glow=False)
                 # names can be up to 20 characters: shrink to fit the name column
                 name = e.get("name", "???")
-                col_w = 300 if mode == "endless" else 330
+                col_w = pw - 62 - 110 - (70 if mode == "endless" else 0)
                 nsz = 24
                 while nsz > 14 and fx_font(nsz).size(name)[0] > col_w:
                     nsz -= 2
-                draw_text(dst, name, nsz, C.WHITE, (x0 + 62, y + (24 - nsz) // 2), "topleft", glow=False)
+                draw_text(dst, name, nsz, C.WHITE, (x0 + 54, y + (24 - nsz) // 2), "topleft", glow=False)
                 if mode == "endless":
-                    draw_text(dst, f"LVL {e.get('level', 0)}", 20, colr, (x0 + 380, y + 2), "topleft", glow=False)
-                draw_text(dst, f"{e.get('score', 0):,}", 24, C.GOLD, (x0 + 540, y), "topright", glow=False)
+                    draw_text(dst, f"LVL {e.get('level', 0)}", 20, colr, (x0 + pw - 170, y + 2), "topleft",
+                              glow=False)
+                draw_text(dst, f"{e.get('score', 0):,}", 24, C.GOLD, (x0 + pw - 20, y), "topright", glow=False)
         self.back.draw(dst, now)
         self.tab.draw(dst, now)
+        self.who.draw(dst, now)
         inp = getattr(self, "_inp", None)
         if inp is not None:
             draw_reticle(dst, inp.x, inp.y, now, inp.fist, False, 0, False, False, present=inp.present)

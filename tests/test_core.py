@@ -753,3 +753,44 @@ def test_points_bonus_scales_kill_value():
     p1, _, _ = sc1.kill("standard", 100, 0.0, False)
     p2, _, _ = sc2.kill("standard", 100, 0.0, False)
     assert p2 == int(p1 * 1.5)
+
+
+# ---- two-player hand tracking -------------------------------------------------------
+def test_assign_hands_keeps_players_apart_and_does_not_swap():
+    from neural.hand import assign_hands
+    assert assign_hands([], [None, None]) == [None, None]
+    # two hands: left one is player 1, right one is player 2 (whatever order MediaPipe lists them)
+    assert assign_hands([0.7, 0.3], [None, None]) == [1, 0]
+    assert assign_hands([0.3, 0.7], [0.3, 0.7]) == [0, 1]
+    # one hand and nobody tracked yet: the side of the midline decides
+    assert assign_hands([0.2], [None, None]) == [0, None]
+    assert assign_hands([0.8], [None, None]) == [None, 0]
+    # both were tracked, one disappears: the survivor keeps its identity even near the middle
+    assert assign_hands([0.52], [0.42, 0.90]) == [0, None]       # P1 drifted right, still P1
+    assert assign_hands([0.48], [0.10, 0.58]) == [None, 0]       # P2 drifted left, still P2
+    # only one player was tracked: a far-away hand on the other side is the other player
+    assert assign_hands([0.85], [0.25, None]) == [None, 0]
+    assert assign_hands([0.30], [0.25, None]) == [0, None]
+
+
+def test_two_hand_channels_are_independent():
+    from neural.hand import HandChannel, ZONE_P1, ZONE_P2
+    c1, c2 = HandChannel(ZONE_P1), HandChannel(ZONE_P2)
+    t = 0.0
+    shots = {1: 0, 2: 0}
+    for i in range(60):                                      # P1 flicks, P2 holds an open hand
+        lm1 = _fake_hand(open_hand=(i % 6 < 3))
+        lm2 = _fake_hand(open_hand=True)
+        c1.process(lm1, t, 1.33, "fist")
+        c2.process(lm2, t, 1.33, "fist")
+        t += 1 / 30
+    assert c1.fire_count >= 5 and c2.fire_count == 0
+    assert c1.present and c2.present
+    # zones map different halves of the camera to the full screen width
+    assert ZONE_P1[0] + ZONE_P1[2] / 2 <= ZONE_P2[0] - ZONE_P2[2] / 2 + 0.07
+    # losing P1 does not disturb P2
+    for i in range(45):                                      # > 0.9 s: a vanished fist is held that long
+        c1.process(None, t, 1.33, "fist")
+        c2.process(_fake_hand(True), t, 1.33, "fist")
+        t += 1 / 30
+    assert not c1.present and c2.present
