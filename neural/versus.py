@@ -17,10 +17,10 @@ import pygame
 
 from . import config as C
 from . import scoring as S
-from .fx import FX, add_glow, draw_text, mix, scale_color
+from .fx import FX, draw_text, mix, scale_color
 from .modes import TimedMode
 from .render import (draw_bar, draw_boss_tethers, draw_hud_panel, draw_reticle, draw_target)
-from .scenes import MenuScene, PlayScene, ResultsScene, Scene, gspec
+from .scenes import MenuScene, PlayScene, ResultsScene, Scene
 from .scoring import Scoring
 from .ui import BigButton, Button
 from .world import World

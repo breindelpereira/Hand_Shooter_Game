@@ -6,7 +6,7 @@ import math
 import pygame
 
 from . import config as C
-from .fx import add_glow, draw_text, mix, scale_color
+from .fx import add_glow, mix, scale_color
 
 # ---------------------------------------------------------------- 3D cube
 _CV = [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),

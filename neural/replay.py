@@ -6,7 +6,6 @@ ReplayInput     -> plays a recorded session back as game input (demos, regressio
 from __future__ import annotations
 
 import csv
-from pathlib import Path
 
 from . import config as C
 from .inputs import InputProvider, InputState

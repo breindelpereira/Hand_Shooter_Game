@@ -1,7 +1,6 @@
 """All screens: Calibrate, Menu (with live attract demo), Play, Results, High scores."""
 from __future__ import annotations
 
-import json
 import math
 import random
 import statistics

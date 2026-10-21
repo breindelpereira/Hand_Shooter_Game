@@ -13,7 +13,7 @@ import numpy as np
 import pygame
 
 from . import config as C
-from .fx import mix, scale_color
+from .fx import scale_color
 
 F = C.FOCAL
 GROUND = 2.0            # world y of the floor (+y is down)
