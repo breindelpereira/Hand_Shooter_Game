@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# runtime files created by the game (personal scores, calibration, settings, recorded sessions)
+data/
