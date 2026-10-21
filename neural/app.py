@@ -288,6 +288,12 @@ class App:
                 self.goto(MenuScene(self))
 
     def _on_key(self, key):
+        # while a text field is open, letters / digits / space / backspace / enter belong to it
+        if getattr(self.scene, "wants_text", False) and (
+                pygame.K_a <= key <= pygame.K_z or pygame.K_0 <= key <= pygame.K_9
+                or key in (pygame.K_SPACE, pygame.K_BACKSPACE, pygame.K_RETURN)):
+            self.scene.on_key(key)
+            return
         if key == pygame.K_F11:
             self.toggle_fullscreen()
         elif key == pygame.K_m:

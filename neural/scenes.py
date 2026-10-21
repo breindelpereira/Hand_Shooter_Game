@@ -121,6 +121,8 @@ class PlayScene(Scene):
         mode, world = self.mode, self.world
 
         if self.paused:
+            self.rx, self.ry = inp.x, inp.y              # keep the pointer alive while paused
+            self.fist_state = inp.fist and inp.present
             for i, b in enumerate(self.pause_buttons):
                 if b.update(dt, inp, locked=self.age < 0.2):
                     a.audio.play("click")
@@ -522,6 +524,8 @@ class PlayScene(Scene):
             for _ in range(14):
                 y = rng.randrange(0, C.H)
                 pygame.draw.line(dst, (80, 20, 30), (0, y), (C.W, y), rng.choice((1, 1, 2)))
+        if self.paused and not self.demo:                 # the pause veil must not hide the pointer
+            draw_reticle(dst, self.rx, self.ry, now, self.fist_state, False, 0, False, False)
 
     def _draw_autolock(self, dst, now):
         """Easy mode feedback: a dotted capture zone around your hand, and when locked a
@@ -1509,6 +1513,11 @@ class TutorialScene(Scene):
 class ResultsScene(Scene):
     LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     NO_NAME = "---"
+
+    @property
+    def wants_text(self) -> bool:
+        """True while the name field is open: letter keys must type, not trigger hotkeys."""
+        return self.entering and not self.saved
 
     def __init__(self, app, stats: dict):
         super().__init__(app)

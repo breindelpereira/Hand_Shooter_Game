@@ -9,7 +9,14 @@ import math
 import pygame
 
 from . import config as C
-from .fx import add_glow, draw_text, scale_color
+from .fx import add_glow, draw_text, font as fx_font, scale_color
+
+
+def fit_size(text: str, size: int, max_w: int, floor: int = 12) -> int:
+    """Largest font size <= size whose rendered text fits in max_w pixels."""
+    while size > floor and fx_font(size).size(text)[0] > max_w:
+        size -= 1
+    return size
 
 
 def _rect_dist(r: pygame.Rect, x: float, y: float) -> float:
@@ -86,13 +93,15 @@ class Button:
             w = int((r.w - 24) * min(1.0, self.progress))
             pygame.draw.rect(dst, col, (r.x + 12, r.bottom - 10, w, 4), border_radius=2)
         tcol = C.WHITE if self.selected else col
+        max_w = self.rect.w - 28                      # text must never spill outside the box
+        lsize = fit_size(self.label, self.size, max_w)
         if self.sub:
-            draw_text(dst, self.label, self.size, tcol, (r.centerx, r.centery - 9),
+            draw_text(dst, self.label, lsize, tcol, (r.centerx, r.centery - 9),
                       glow=lean > 0.3 or self.selected, plate=False)
-            draw_text(dst, self.sub, 18, C.GREY if not self.selected else C.WHITE, (r.centerx, r.centery + 21),
-                      glow=False, plate=False)
+            draw_text(dst, self.sub, fit_size(self.sub, 18, max_w), C.GREY if not self.selected else C.WHITE,
+                      (r.centerx, r.centery + 21), glow=False, plate=False)
         elif self.label:
-            draw_text(dst, self.label, self.size, tcol, r.center, glow=lean > 0.3 or self.selected, plate=False)
+            draw_text(dst, self.label, lsize, tcol, r.center, glow=lean > 0.3 or self.selected, plate=False)
 
 
 class BigButton:

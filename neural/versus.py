@@ -210,6 +210,8 @@ class VersusScene(Scene):
         ins = [inp1, a.inp2]
 
         if self.paused:
+            for p, inp in zip(self.p, ins):                  # keep both pointers alive while paused
+                p.rx, p.ry, p.present = inp.x, inp.y, inp.present
             for i, b in enumerate(self.pause_buttons):
                 if any(b.update(dt, inp, locked=self.age < 0.2) for inp in ins):
                     a.audio.play_ui("select")
@@ -641,6 +643,9 @@ class VersusScene(Scene):
             draw_text(dst, "PAUSED", 78, C.CYAN, (cx, 240))
             for b in self.pause_buttons:
                 b.draw(dst, now)
+            for p in self.p:                                 # pointers on top of the veil
+                if p.present or not self.app.input.has_camera:
+                    draw_reticle(dst, p.rx, p.ry, now, p.fist, False, 0, False, False, tint=p.color)
 
     def draw_overlay(self, dst):
         fx = self.fx

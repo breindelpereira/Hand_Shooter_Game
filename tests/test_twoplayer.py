@@ -188,3 +188,69 @@ def test_player2_on_the_keyboard_input_and_absent_by_default():
     m.set_players(2)
     p1, p2 = m.poll_players(DT)
     assert p2.present and 0 <= p2.x <= C.W
+
+
+# ---- UI fixes ------------------------------------------------------------------------------
+def test_letters_type_into_the_name_box_instead_of_triggering_hotkeys():
+    import pygame
+    a = app()
+    stats = dict(mode="timed", table="timed", easy=False, score=5000, accuracy=0.5, max_combo=3, kills=9,
+                 leaks=1, level=0, by_kind={}, perfects=0, lives_end=None, rank="B")
+    a.goto(ResultsScene(a, stats))
+    a._swap()
+    res = a.scene
+    assert res.entering and res.wants_text
+    pip0, bloom0, muted0 = a.show_pip, a.bloom_on, a.audio.muted
+    for ch in "CMBA":                                    # C = camera, M = mute, B = bloom hotkeys
+        a._on_key(getattr(pygame, "K_" + ch.lower()))
+    assert res.name == "CMBA", res.name
+    assert (a.show_pip, a.bloom_on, a.audio.muted) == (pip0, bloom0, muted0), "hotkeys must not fire"
+    a._on_key(pygame.K_F3)                               # function keys still work while typing
+    assert a.debug is True
+    a._on_key(pygame.K_F3)
+    # once the score is saved the hotkeys come back
+    res._save("CMBA")
+    assert not res.wants_text
+    a._on_key(pygame.K_c)
+    assert a.show_pip != pip0
+    a.set_preview(pip0)
+
+
+def test_button_text_always_fits_inside_its_box():
+    from neural.fx import font
+    from neural.scenes import ScoresScene
+    from neural.ui import Button, fit_size
+    a = app()
+    sc = ScoresScene(a)
+    for easy in (False, True):
+        for pair in (False, True):
+            sc.easy, sc.pair = easy, pair
+            sc._sync_tab()
+            for b in (sc.tab, sc.who, sc.back):
+                size = fit_size(b.label, b.size, b.rect.w - 28)
+                assert font(size).size(b.label)[0] <= b.rect.w - 28 or size == 12, (b.label, size)
+    b = Button((0, 0, 200, 50), "A LONG BUTTON LABEL", "x", size=34)
+    assert font(fit_size(b.label, b.size, b.rect.w - 28)).size(b.label)[0] <= 172
+
+
+def test_the_pointer_is_drawn_and_tracked_on_the_pause_screen():
+    import neural.scenes as scenes
+    from neural.inputs import InputState
+    a = app()
+    a.cfg.autofire = False
+    pl = PlayScene(a, "timed")
+    a.goto(pl)
+    a._swap()
+    pl.mode.phase = "play"
+    pl.on_key(__import__("pygame").K_p)                  # pause
+    assert pl.paused
+    pl.update(DT, InputState(x=321, y=412, present=True))
+    assert (pl.rx, pl.ry) == (321, 412), "the pointer must keep following the hand while paused"
+    calls = []
+    orig = scenes.draw_reticle
+    scenes.draw_reticle = lambda *args, **kw: (calls.append(args[1:3]), orig(*args, **kw))[1]
+    try:
+        pl.draw(a.canvas)
+    finally:
+        scenes.draw_reticle = orig
+    assert (321, 412) in calls[-1:], "pause screen must draw the pointer last, on top of the veil"
