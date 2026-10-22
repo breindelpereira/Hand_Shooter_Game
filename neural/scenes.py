@@ -783,10 +783,10 @@ class MenuScene(Scene):
         veil.fill((2, 3, 14, 150))
         dst.blit(veil, (0, 0))
         f88 = fx_font(88)
-        w1, w2 = f88.size("NEURAL ")[0], f88.size("TARGETING")[0]
+        w1, w2 = f88.size("HAND ")[0], f88.size("SHOOTER")[0]
         x0 = C.CX - (w1 + w2) // 2
-        draw_text(dst, "NEURAL ", 88, C.CYAN, (x0, 92), "midleft")
-        draw_text(dst, "TARGETING", 88, C.MAGENTA, (x0 + w1, 92), "midleft")
+        draw_text(dst, "HAND ", 88, C.CYAN, (x0, 92), "midleft")
+        draw_text(dst, "SHOOTER", 88, C.MAGENTA, (x0 + w1, 92), "midleft")
         draw_text(dst, "PLAY WITH YOUR HANDS  -  NO CONTROLLER NEEDED", 24, C.GOLD, (C.CX, 152), glow=False)
         n_today = S.plays_today()
         if n_today:
@@ -836,8 +836,7 @@ class PickScene(Scene):
     CARDS_1P = (("timed", "SCORE ATTACK", C.CYAN, "60 seconds. Hit as many", "targets as you can."),
                 ("endless", "SURVIVAL", C.MAGENTA, "3 lives. Clear level after", "level. How far can you get?"))
     CARDS_2P = (("versus", "VERSUS", C.CYAN, "Both at once.", "Highest score wins."),
-                ("coop", "CO-OP", C.GREEN, "Both at once. One", "shared team score."),
-                ("duel", "DUEL", C.GOLD, "Take turns on the", "SAME targets."))
+                ("coop", "CO-OP", C.GREEN, "Both at once. One", "shared team score."))
 
     def __init__(self, app):
         super().__init__(app)
@@ -892,13 +891,9 @@ class PickScene(Scene):
 
     def _start(self, mode: str):
         a = self.app
-        if mode in ("versus", "coop", "duel"):
-            from .versus import DuelFlow, DuelInterlude, VersusScene
-            if mode == "duel":
-                flow = DuelFlow(a)
-                make = lambda: DuelInterlude(a, flow, 1)            # noqa: E731
-            else:
-                make = lambda: VersusScene(a, coop=(mode == "coop"))   # noqa: E731
+        if mode in ("versus", "coop"):
+            from .versus import VersusScene
+            make = lambda: VersusScene(a, coop=(mode == "coop"))       # noqa: E731
         else:
             make = lambda: PlayScene(a, mode)                       # noqa: E731
         if a.input.has_camera and not a.session_trial_done:
@@ -919,7 +914,7 @@ class PickScene(Scene):
         if act in ("p1", "p2"):
             a.want_players = 2 if act == "p2" else 1
             self._sync()
-        elif act in ("timed", "endless", "versus", "coop", "duel"):
+        elif act in ("timed", "endless", "versus", "coop"):
             self._start(act)
         elif act == "easy" or act == "normal":
             a.cfg.autofire = act == "easy"
@@ -1660,7 +1655,7 @@ class ResultsScene(Scene):
         veil.fill((2, 3, 14, 120))
         dst.blit(veil, (0, 0))
         title = s.get("title") or ("TIME!" if s["mode"] == "timed" else "SYSTEM FAILURE")
-        tcol = s.get("title_color") or (C.GOLD if s["mode"] in ("timed", "versus", "coop", "duel") else C.RED)
+        tcol = s.get("title_color") or (C.GOLD if s["mode"] in ("timed", "versus", "coop") else C.RED)
         draw_text(dst, title, 70 if len(title) < 16 else 58, tcol, (C.CX, 62))
         if s.get("easy"):
             draw_text(dst, "EASY MODE - AUTO FIRE", 20, C.GREEN, (C.CX, 112), glow=False)
@@ -1756,7 +1751,7 @@ class ScoresScene(Scene):
         a.tunnel.draw(dst, now * 5, 0.3, dt=1 / 60)
         if self.pair:
             heading = "HIGH SCORES  -  2 PLAYER"
-            panels = (("versus", "VERSUS", C.CYAN), ("coop", "CO-OP", C.GREEN), ("duel", "DUEL", C.GOLD))
+            panels = (("versus", "VERSUS", C.CYAN), ("coop", "CO-OP", C.GREEN))
             suffix = ""
         else:
             heading = "HIGH SCORES" + ("  -  EASY" if self.easy else "")

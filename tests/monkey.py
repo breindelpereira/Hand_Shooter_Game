@@ -58,13 +58,6 @@ class Monkey(InputProvider):
         return [self._one(0, dt), self._one(1, dt) if self.players == 2 else InputState(present=False)]
 
 
-def _flow(app):
-    from neural.versus import DuelFlow
-    f = DuelFlow(app)
-    f.stats = [dict(score=12345, accuracy=0.6, max_combo=9, kills=30, leaks=2)]
-    return f
-
-
 def run(frames, seed, camera):
     rng = random.Random(seed)
     app = App(input_mode="mouse", audio=False, skip_calibration=True, fullscreen=False)
@@ -95,12 +88,10 @@ def run(frames, seed, camera):
             app.cfg.gesture = rng.choice(("fist", "pinch"))
         if rng.random() < 0.0012:                # jump into screens the monkey rarely finds by clicking
             from neural import scenes as SC
-            from neural.versus import DuelFlow, DuelInterlude, VersusScene
+            from neural.versus import VersusScene
             factories = [lambda: SC.SettingsScene(app), lambda: SC.ScoresScene(app),
                          lambda: SC.TutorialScene(app), lambda: SC.CalibrateScene(app),
                          lambda: SC.TrialScene(app, lambda: SC.PlayScene(app, "endless")),
-                         lambda: DuelInterlude(app, DuelFlow(app), rng.choice((1, 2))) if False else
-                         DuelInterlude(app, _flow(app), 2),
                          lambda: VersusScene(app, coop=rng.random() < 0.5),
                          lambda: SC.PlayScene(app, rng.choice(("timed", "endless")))]
             try:

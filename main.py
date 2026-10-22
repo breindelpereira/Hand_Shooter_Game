@@ -1,4 +1,4 @@
-"""Neural Targeting - hand-tracked arcade shooter.
+"""Hand Shooter - hand-tracked arcade shooter.
 
     python main.py                 # hand tracking if a camera is found, else mouse
     python main.py --input mouse   # force mouse (development)
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def parse():
-    p = argparse.ArgumentParser(description="Neural Targeting")
+    p = argparse.ArgumentParser(description="Hand Shooter")
     p.add_argument("--input", choices=("auto", "hand", "mouse", "replay"), default="auto")
     p.add_argument("--replay", help="session CSV to play back with --input replay")
     p.add_argument("--gesture", choices=("fist", "pinch", "clock", "click"), default=None,

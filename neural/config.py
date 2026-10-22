@@ -1,4 +1,4 @@
-"""Tunable constants for Neural Targeting. Everything gameplay-related lives here."""
+"""Tunable constants for Hand Shooter. Everything gameplay-related lives here."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

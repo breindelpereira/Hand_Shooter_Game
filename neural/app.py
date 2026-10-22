@@ -68,7 +68,7 @@ class App:
         pygame.init()
         self.cfg = Settings(duration, timed_lives, autofire, gesture, fullscreen)
         self._open_display(self.cfg.fullscreen)
-        pygame.display.set_caption("Neural Targeting")
+        pygame.display.set_caption("Hand Shooter")
         pygame.mouse.set_visible(False)
         self.canvas = pygame.Surface((C.W, C.H)).convert()
         self.clock = pygame.time.Clock()

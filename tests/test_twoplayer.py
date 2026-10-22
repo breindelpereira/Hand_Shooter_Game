@@ -1,4 +1,4 @@
-"""Two-player modes: Duel fairness, Versus / Co-op scoring and flow, the choose screen."""
+"""Two-player modes: Versus / Co-op scoring and flow, the choose screen."""
 import os
 import random
 import sys
@@ -19,7 +19,7 @@ from neural.app import App, Settings  # noqa: E402
 Settings.PATH = _tmp / "settings.json"
 from neural.inputs import BotInput, InputProvider  # noqa: E402
 from neural.scenes import PickScene, PlayScene, ResultsScene  # noqa: E402
-from neural.versus import DuelFlow, DuelInterlude, VersusScene  # noqa: E402
+from neural.versus import VersusScene  # noqa: E402
 
 DT = 1 / 60
 _app = None
@@ -69,49 +69,6 @@ def _run_scene_until_results(a, scene, seconds=100):
         if isinstance(a.scene, ResultsScene):
             return True
     return False
-
-
-def test_duel_turns_see_identical_targets_whatever_the_player_does():
-    a = app()
-    logs = []
-    for skill in (0.25, 0.97):
-        a.cfg.autofire = False
-        pl = PlayScene(a, "timed", seed=424242, adaptive=False)
-        a.goto(pl)
-        a._swap()
-        pl.mode.phase = "play"
-        log = []
-        orig = pl.world.spawn
-
-        def spy(kind, x=None, y=None, z=C.Z_FAR, swoop=None, _o=orig, _l=log, _pl=pl):
-            t = _o(kind, x, y, z, swoop=swoop)
-            if kind != "mini":                       # splitter children depend on what you shot
-                _l.append((round(_pl.mode.t, 2), kind, round(t.x0, 3), round(t.y0, 3)))
-            return t
-        pl.world.spawn = spy
-        bot = BotInput(pl.world, skill=skill, rng=random.Random(5))
-        for _ in range(int(45 / DT)):
-            pl.update(DT, bot.poll(DT))
-        logs.append(log)
-    assert len(logs[0]) > 15
-    assert logs[0] == logs[1], "both Duel turns must get exactly the same targets"
-
-
-def test_duel_flow_compares_scores_and_hands_over_to_player_two():
-    a = app()
-    flow = DuelFlow(a)
-    a.cfg.autofire = False
-    flow.stats = [dict(score=30000, accuracy=0.8, max_combo=20, kills=40, leaks=5),
-                  dict(score=45000, accuracy=0.7, max_combo=25, kills=55, leaks=3)]
-    st = flow._final_stats()
-    assert st["title"] == "PLAYER 2 WINS!" and st["score"] == 45000 and st["table"] == "duel"
-    assert st["rank"] == "P2" and any(r[0] == "WINNER" and r[1] == "PLAYER 2" for r in st["rows"])
-    flow.stats[1]["score"] = 30000
-    assert "TIE" in flow._final_stats()["title"]
-    flow.stats = []
-    flow._turn_done(1, dict(score=1000, accuracy=0.5, max_combo=3, kills=5, leaks=0))
-    a._swap()
-    assert isinstance(a.scene, DuelInterlude) and a.scene.n == 2
 
 
 def test_versus_credits_the_shooter_and_ends_in_a_results_screen():
@@ -173,7 +130,7 @@ def test_choose_screen_switches_between_solo_and_two_player_cards():
     assert [b.action for b in pick.modes] == ["timed", "endless"]
     a.want_players = 2
     pick._sync()
-    assert [b.action for b in pick.modes] == ["versus", "coop", "duel"]
+    assert [b.action for b in pick.modes] == ["versus", "coop"]
     assert pick.players[1].selected and not pick.players[0].selected
     a.want_players = 1
     pick._sync()

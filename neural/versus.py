@@ -2,8 +2,6 @@
 
   * VersusScene  - both players at once on one screen; highest score wins.
   * VersusScene(coop=True) - both players at once, one shared score / combo.
-  * DuelFlow     - turn-based: player 1 plays Score Attack, then player 2 plays the *identical*
-                   target pattern (fixed seed + fixed difficulty curve); higher score wins.
 
 Everything here is additive: switch it off with config.TWO_PLAYER = False (the choose screen
 then shows no PLAYERS option) or go back to the `baseline-1p` git tag.
@@ -27,104 +25,6 @@ from .world import World
 
 P_COLORS = (C.CYAN, C.MAGENTA)
 P_NAMES = ("P1", "P2")
-
-
-# =============================================================== Duel (turn-based)
-class DuelFlow:
-    """Runs two consecutive Score Attack turns on the same targets and compares them."""
-
-    def __init__(self, app):
-        self.app = app
-        self.seed = random.randrange(1 << 30)
-        self.stats = []
-
-    def start(self):
-        self.app.goto(DuelInterlude(self.app, self, 1))
-
-    def play_turn(self, n: int):
-        a = self.app
-        a.goto(PlayScene(a, "timed", seed=self.seed, adaptive=False,
-                         on_finish=lambda stats, n=n: self._turn_done(n, stats),
-                         label=f"PLAYER {n}  -  DUEL"))
-
-    def _turn_done(self, n: int, stats: dict):
-        self.stats.append(stats)
-        if n == 1:
-            self.app.goto(DuelInterlude(self.app, self, 2))
-        else:
-            self.app.goto(ResultsScene(self.app, self._final_stats()))
-
-    def _final_stats(self) -> dict:
-        s1, s2 = self.stats
-        a, b = s1["score"], s2["score"]
-        win = 0 if a == b else (1 if a > b else 2)
-        best = s1 if win != 2 else s2
-        title = "IT'S A TIE!" if win == 0 else f"PLAYER {win} WINS!"
-        pct = lambda s: f"{int(s['accuracy'] * 100)}%"      # noqa: E731
-        rows = [("P1 SCORE", f"{a:,}", P_COLORS[0]), ("P2 SCORE", f"{b:,}", P_COLORS[1]),
-                ("KILLS  P1 / P2", f"{s1['kills']} / {s2['kills']}", C.CYAN),
-                ("ACCURACY  P1 / P2", f"{pct(s1)} / {pct(s2)}", C.GREEN),
-                ("WINNER", "TIE" if win == 0 else f"PLAYER {win}", C.GOLD)]
-        return dict(mode="duel", table="duel", easy=bool(self.app.cfg.autofire), score=best["score"],
-                    accuracy=best["accuracy"], max_combo=best["max_combo"], kills=best["kills"],
-                    leaks=best["leaks"], level=0, by_kind={}, perfects=0, lives_end=None,
-                    rank=("=" if win == 0 else f"P{win}"), rank_color=(C.GOLD if win == 0 else P_COLORS[win - 1]),
-                    celebrate=True, title=title, title_color=C.GOLD, rows=rows,
-                    again=lambda: DuelFlow(self.app).start())
-
-
-class DuelInterlude(Scene):
-    """'PLAYER n - get ready': the player steps up, holds a hand in the circle, and the turn starts."""
-
-    show_guide = True
-    pip_scale = 1.0
-
-    def __init__(self, app, flow: DuelFlow, n: int):
-        super().__init__(app)
-        self.flow, self.n = flow, n
-        col = P_COLORS[n - 1]
-        self.go = BigButton((C.CX, 440), 112, "GO", "go", col, dwell=C.PLAY_DWELL)
-        self._inp = None
-
-    def enter(self):
-        self.app.audio.sfx_muted = False
-        self.app.audio.music_start()
-        self.app.audio.set_intensity(0.25)
-
-    def on_key(self, key):
-        if key == pygame.K_ESCAPE:
-            self.app.goto(MenuScene(self.app))
-        elif key in (pygame.K_RETURN, pygame.K_SPACE):
-            self.flow.play_turn(self.n)
-
-    def update(self, dt, inp):
-        super().update(dt, inp)
-        self._inp = inp
-        if self.go.update(dt, inp, self.age < C.UI_LOCK_TIME):
-            self.app.audio.play_ui("select")
-            self.flow.play_turn(self.n)
-
-    def draw(self, dst):
-        a = self.app
-        now = a.clock_t
-        a.tunnel.set_theme(a.base_theme())
-        a.tunnel.draw(dst, now * 5, 0.35, dt=1 / 60)
-        col = P_COLORS[self.n - 1]
-        draw_text(dst, "DUEL", 56, C.GOLD, (C.CX, 70))
-        draw_text(dst, f"PLAYER {self.n}", 96, col, (C.CX, 170))
-        if self.n == 1:
-            sub = "Both players get the exact same targets. Highest score wins!"
-        else:
-            p1 = self.flow.stats[0]["score"]
-            sub = f"Player 1 scored {p1:,}. Can you beat it?"
-        draw_text(dst, sub, 28, C.WHITE, (C.CX, 250), glow=False)
-        draw_text(dst, "HOLD YOUR HAND IN THE CIRCLE WHEN YOU ARE READY", 24, C.GREEN, (C.CX, 300))
-        self.go.sub = "HOLD HAND HERE"
-        self.go.draw(dst, now)
-        inp = self._inp
-        if inp is not None:
-            draw_reticle(dst, inp.x, inp.y, now, inp.fist, False, 0, False, False,
-                         present=inp.present, tint=col)
 
 
 # =============================================================== Live 2-player
