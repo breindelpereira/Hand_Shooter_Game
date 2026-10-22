@@ -785,8 +785,18 @@ class MenuScene(Scene):
         f88 = fx_font(88)
         w1, w2 = f88.size("HAND ")[0], f88.size("SHOOTER")[0]
         x0 = C.CX - (w1 + w2) // 2
-        draw_text(dst, "HAND ", 88, C.CYAN, (x0, 92), "midleft")
-        draw_text(dst, "SHOOTER", 88, C.MAGENTA, (x0 + w1, 92), "midleft")
+        bob = int(3 * math.sin(now * 1.6)) if C.UI_POLISH else 0
+        draw_text(dst, "HAND ", 88, C.CYAN, (x0, 92 + bob), "midleft")
+        draw_text(dst, "SHOOTER", 88, C.MAGENTA, (x0 + w1, 92 + bob), "midleft")
+        if C.UI_POLISH:
+            # underline in the two logo colours + a bright shine that sweeps across every few seconds
+            ux, uw = x0, w1 + w2
+            pygame.draw.line(dst, C.CYAN, (ux, 138 + bob), (ux + w1, 138 + bob), 4)
+            pygame.draw.line(dst, C.MAGENTA, (ux + w1, 138 + bob), (ux + uw, 138 + bob), 4)
+            ph = (now % 4.0) / 1.2
+            if ph < 1.0:
+                sx = ux - 60 + (uw + 120) * ph
+                add_glow(dst, sx, 92 + bob, C.WHITE, 70, 0.55 * math.sin(ph * math.pi))
         draw_text(dst, "PLAY WITH YOUR HANDS  -  NO CONTROLLER NEEDED", 24, C.GOLD, (C.CX, 152), glow=False)
         n_today = S.plays_today()
         if n_today:
@@ -1673,6 +1683,10 @@ class ResultsScene(Scene):
         if s.get("rows"):                                   # 2-player screens supply their own rows
             rows = [(k, v) for k, v, _c in s["rows"]]
             row_cols = {k: c for k, _v, c in s["rows"]}
+        if C.UI_POLISH and not s.get("rows"):                # the score counts up like an arcade machine
+            k_up = min(1.0, self.age / 1.1)
+            shown = int(s["score"] * (1 - (1 - k_up) ** 3))
+            rows[0] = ("SCORE", f"{shown:,}")
         for i, (k, v) in enumerate(rows):
             y = 148 + i * 43
             reveal = min(1.0, max(0.0, (self.age - 0.15 * i) * 4))
@@ -1771,6 +1785,11 @@ class ScoresScene(Scene):
                 draw_text(dst, "no scores yet", 24, C.GREY, (x0 + pw // 2, 330), glow=False)
             for i, e in enumerate(rows):
                 y = 205 + i * 37
+                if C.UI_POLISH:
+                    bar = pygame.Surface((pw - 24, 34), pygame.SRCALPHA)
+                    tint = (C.GOLD, (215, 225, 240), (232, 150, 92))[i] if i < 3 else C.WHITE
+                    bar.fill((*tint, 34 if i < 3 else (12 if i % 2 else 0)))
+                    dst.blit(bar, (x0 + 12, y - 5))
                 medal = (C.GOLD, (215, 225, 240), (232, 150, 92)).__getitem__(i) if i < 3 else C.GREY
                 draw_text(dst, f"{i + 1:>2}.", 22, medal, (x0 + 14, y), "topleft", glow=False)
                 # names can be up to 20 characters: shrink to fit the name column

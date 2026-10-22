@@ -109,3 +109,6 @@ PURPLE = (175, 100, 255)
 BLUE = (80, 150, 255)
 WHITE = (235, 245, 255)
 GREY = (168, 182, 208)            # brighter than before: easier to read on dark panels
+
+# Visual polish (glass buttons, slide-in menus, screen fades, score count-up). False = the plainer look.
+UI_POLISH = True

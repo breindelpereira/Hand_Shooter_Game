@@ -62,6 +62,8 @@ class Settings:
 
 
 class App:
+    _fade = 0.0
+
     def __init__(self, input_mode="auto", fullscreen=None, audio=True, camera=C.CAMERA_INDEX,
                  duration=C.TIMED_DURATION, timed_lives=C.TIMED_LIVES, bloom=True,
                  skip_calibration=False, autofire=None, gesture=None, replay=None):
@@ -221,6 +223,7 @@ class App:
             self.scene.leave()
         self.scene = self._next
         self._next = None
+        self._fade = 1.0 if C.UI_POLISH else 0.0         # quick fade-in from black on every screen change
         self.scene.enter()
 
     # ---- helpers for scenes ------------------------------------------------
@@ -332,6 +335,11 @@ class App:
         self.screen.fill((0, 0, 0))
         self.screen.blit(self.canvas, sc.offset)
         sc.draw_overlay(self.screen)
+        if self._fade > 0.0:
+            self._fade = max(0.0, self._fade - 1 / 18)
+            veil = pygame.Surface((C.W, C.H))
+            veil.set_alpha(int(255 * self._fade ** 1.5))
+            self.screen.blit(veil, (0, 0))
         self._draw_pip()
         if self.toast:
             self.toast[1] -= 1 / 60

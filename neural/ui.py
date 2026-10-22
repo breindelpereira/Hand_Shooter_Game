@@ -41,6 +41,8 @@ class Button:
         self.pop = 0.0          # 1 -> 0 after being chosen
         self.selected = False   # drawn as the active option of a choice row
         self.enabled = True
+        self.delay = 0.0        # slide-in stagger (set by update_buttons)
+        self._t0 = None
 
     def hovered(self, x, y) -> bool:
         return self.rect.inflate(10, 10).collidepoint(x, y)
@@ -66,18 +68,46 @@ class Button:
             return True
         return False
 
+    def _intro(self, now):
+        """0..1 ease-out for the slide-in when a screen opens."""
+        if not C.UI_POLISH:
+            return 1.0
+        if self._t0 is None:
+            self._t0 = now + self.delay
+        k = min(1.0, max(0.0, (now - self._t0) / 0.35))
+        return 1 - (1 - k) ** 3
+
     def draw(self, dst, now):
+        intro = self._intro(now)
+        if intro < 1.0:
+            if intro <= 0.0:
+                return
+            buf = pygame.Surface(dst.get_size(), pygame.SRCALPHA)
+            self._draw(buf, now, int((1 - intro) * 30))
+            buf.set_alpha(int(255 * intro))
+            dst.blit(buf, (0, 0))
+            return
+        self._draw(dst, now, 0)
+
+    def _draw(self, dst, now, dy=0):
         col = self.color if self.enabled else C.GREY
         lean = max(self.hot, self.near * 0.7)
         pulse = 0.5 + 0.5 * math.sin(now * 7.0)
         grow = int(self.near * 8 + self.pop * 16)
-        r = self.rect.inflate(grow, int(grow * 0.6))
+        r = self.rect.inflate(grow, int(grow * 0.6)).move(0, dy)
         panel = pygame.Surface(r.size, pygame.SRCALPHA)
         if self.selected:
             fill = (int(col[0] * 0.28), int(col[1] * 0.28), int(col[2] * 0.28), 235)
         else:
             fill = (int(8 + col[0] * 0.10), int(14 + col[1] * 0.10), int(34 + col[2] * 0.10), 205)
         pygame.draw.rect(panel, fill, panel.get_rect(), border_radius=14)
+        if C.UI_POLISH:                               # glassy top sheen + darker bottom edge
+            sheen = pygame.Surface((r.w - 8, max(2, r.h // 2 - 2)), pygame.SRCALPHA)
+            for yy in range(sheen.get_height()):
+                a = int(46 * (1 - yy / sheen.get_height()) ** 1.5 * (1.4 if self.selected else 1.0))
+                pygame.draw.line(sheen, (*scale_color(col, 1.0), a), (0, yy), (sheen.get_width(), yy))
+            panel.blit(sheen, (4, 3))
+            pygame.draw.rect(panel, (0, 0, 8, 70), (4, r.h - 9, r.w - 8, 6), border_radius=3)
         if self.pop > 0:
             pygame.draw.rect(panel, (*col, int(110 * self.pop)), panel.get_rect(), border_radius=14)
         dst.blit(panel, r.topleft)
@@ -169,7 +199,9 @@ def update_buttons(buttons, dt, inp, locked, audio=None):
     """Update a group of buttons; returns the one chosen this frame (or None).
     Plays a soft tick as the reticle first touches a button and a 'select' when one is chosen."""
     chosen = None
-    for b in buttons:
+    for i, b in enumerate(buttons):
+        if getattr(b, "_t0", 0) is None and not b.delay:
+            b.delay = 0.05 * i
         was = b.hot
         if b.update(dt, inp, locked) and chosen is None:
             chosen = b
@@ -186,3 +218,6 @@ def draw_panel(dst, rect, alpha=170, border=C.CYAN):
     pygame.draw.rect(s, (6, 10, 28, alpha), s.get_rect(), border_radius=16)
     dst.blit(s, r.topleft)
     pygame.draw.rect(dst, scale_color(border, 0.5), r, 2, border_radius=16)
+    if C.UI_POLISH:
+        pygame.draw.line(dst, border, (r.x + 22, r.y + 1), (r.x + 90, r.y + 1), 4)
+        pygame.draw.line(dst, border, (r.right - 90, r.bottom - 2), (r.right - 22, r.bottom - 2), 4)
