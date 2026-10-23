@@ -27,6 +27,7 @@ class Settings:
         self.gesture = C.DEFAULT_GESTURE
         self.tutorial_done = False
         self.show_preview = True          # camera picture-in-picture
+        self.show_debug = False           # tracking info overlay (also F3)
         self.fullscreen = True            # full screen by default; remembered
         try:
             with open(self.PATH, "r", encoding="utf-8") as f:
@@ -36,6 +37,7 @@ class Settings:
             self.tutorial_done = bool(d.get("tutorial_done", False))
             self.fullscreen = bool(d.get("fullscreen", True))
             self.show_preview = bool(d.get("show_preview", True))
+            self.show_debug = bool(d.get("show_debug", False))
         except (OSError, ValueError):
             pass
         if fullscreen is not None:
@@ -56,7 +58,8 @@ class Settings:
                 json.dump({"autofire": self.autofire, "gesture": self.gesture,
                            "tutorial_done": self.tutorial_done,
                            "fullscreen": self.fullscreen,
-                           "show_preview": self.show_preview}, f)
+                           "show_preview": self.show_preview,
+                           "show_debug": self.show_debug}, f)
         except OSError:
             pass
 
@@ -78,7 +81,7 @@ class App:
         self.running = True
         self._replay_path = replay
         self.bloom_on = bloom
-        self.debug = False
+        self.debug = self.cfg.show_debug
         self.show_pip = self.cfg.show_preview
         self.session_trial_done = False   # reset by the idle timeout: the next visitor gets the trial
         self.idle_enabled = None          # None = auto (only when a camera is the input)
@@ -144,6 +147,11 @@ class App:
     def set_preview(self, on: bool):
         self.show_pip = on
         self.cfg.show_preview = on
+        self.cfg.save()
+
+    def set_debug(self, on: bool):
+        self.debug = on
+        self.cfg.show_debug = on
         self.cfg.save()
 
     def toggle_fullscreen(self):
@@ -305,7 +313,7 @@ class App:
             self.bloom_on = not self.bloom_on
             self.toast = ["BLOOM " + ("ON" if self.bloom_on else "OFF"), 1.2, C.GREY]
         elif key == pygame.K_F3:
-            self.debug = not self.debug
+            self.set_debug(not self.debug)
         elif key == pygame.K_c:
             self.set_preview(not self.show_pip)
         elif key == pygame.K_F8:

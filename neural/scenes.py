@@ -996,10 +996,10 @@ class SettingsScene(Scene):
         super().__init__(app)
         cx = C.CX
         acts = (("fullscreen", C.CYAN), ("preview", C.CYAN), ("sound", C.CYAN),
-                ("calibrate", C.GREEN), ("tutorial", C.CYAN))
+                ("debug", C.CYAN), ("calibrate", C.GREEN), ("tutorial", C.CYAN))
         self.buttons = [Button((cx - 270, 140 + i * 78, 540, 64), "", act, col, size=26)
                         for i, (act, col) in enumerate(acts)]
-        self.back = Button((cx - 130, 140 + 5 * 78 + 6, 260, 58), "BACK", "back", C.GREY, size=26)
+        self.back = Button((cx - 130, 140 + 6 * 78 + 6, 260, 58), "BACK", "back", C.GREY, size=26)
         self._sync()
 
     def _sync(self):
@@ -1008,12 +1008,13 @@ class SettingsScene(Scene):
             "fullscreen": f"FULLSCREEN:  {'ON' if a.cfg.fullscreen else 'OFF'}",
             "preview": f"CAMERA VIEW:  {'SHOWN' if a.show_pip else 'HIDDEN'}",
             "sound": f"SOUND:  {'OFF' if a.audio.muted else 'ON'}",
+            "debug": f"TRACKING INFO:  {'SHOWN' if a.debug else 'HIDDEN'}",
             "calibrate": "CALIBRATE YOUR HAND  (optional)",
             "tutorial": "HOW TO PLAY  (full tutorial)",
         }
         for b in self.buttons:
             b.label = lab[b.action]
-        self.buttons[3].enabled = a.input.has_camera
+        self.buttons[4].enabled = a.input.has_camera
         self.buttons[1].enabled = a.input.has_camera
 
     def on_key(self, key):
@@ -1034,6 +1035,8 @@ class SettingsScene(Scene):
             a.set_preview(not a.show_pip)
         elif act == "sound":
             a.audio.toggle_mute()
+        elif act == "debug":
+            a.set_debug(not a.debug)
         elif act == "calibrate":
             a.goto(CalibrateScene(a, then_menu=True))
             return
